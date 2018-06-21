@@ -1,0 +1,25 @@
+plugins {
+    id 'java-library'
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src']
+        }
+    }
+}
+
+jar {
+    manifest {
+        from('META-INF/MANIFEST.MF')
+    }
+}
+
+dependencies {
+    implementation group: 'com.google.guava', name: 'guava', version: '13.0'
+}
+
+repositories {
+    jcenter()
+}
