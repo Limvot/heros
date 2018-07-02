@@ -13,7 +13,7 @@ package heros;
 import java.util.List;
 import java.util.Set;
 
-import sun.org.mozilla.javascript.internal.ast.Block;
+import org.mozilla.javascript.ast.Block;
 
 /**
  * An interprocedural control-flow graph.
