@@ -12,7 +12,6 @@
  ******************************************************************************/
 package heros.solver;
 
-
 import heros.DontSynchronize;
 import heros.EdgeFunction;
 import heros.EdgeFunctionCache;
@@ -45,9 +44,17 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutionException;
+
+import java.io.Writer;
+import java.io.BufferedWriter;
+import java.io.OutputStreamWriter;
+import java.io.FileOutputStream;
 
 import com.google.common.base.Predicate;
 import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Table;
@@ -294,6 +301,62 @@ public class IDESolver<N,D,M,V,I extends InterproceduralCFG<N, M>> {
 	
 		// Update the control flow graph
 		UpdatableInterproceduralCFG<N, M> oldcfg = (UpdatableInterproceduralCFG<N, M>) icfg();
+        // MINE
+        Map<Integer, List<Integer>> all_Old_Edges = new HashMap<Integer, List<Integer>>(10000);
+        Map<Integer, List<Integer>> new_New_Edges = new HashMap<Integer, List<Integer>>(10000);
+        Map<Integer, List<Integer>> old_Expired_Edges = new HashMap<Integer, List<Integer>>(10000);
+
+        CacheBuilder<Object, Object> cb = CacheBuilder.newBuilder().concurrencyLevel(1).initialCapacity(1000);
+        LoadingCache<UpdatableWrapper<?>, Integer> counterCache = cb.build(new CacheLoader<UpdatableWrapper<?>, Integer>() {
+            int counter = 0;
+            @SuppressWarnings({ "unchecked", "rawtypes" })
+            @Override
+            public Integer load(UpdatableWrapper<?> key) { return counter++; }
+        });
+        List<UpdatableWrapper<N>> workQueue = new ArrayList<UpdatableWrapper<N>>();
+        for (N seed : initialSeeds) {
+            //workQueue.add(icfg().wrap(seed));
+            workQueue.add(oldcfg.wrap(seed));
+            //System.out.println("adding " + seed);
+            //System.out.println("adding " + seed.toString());
+            //System.out.println("adding " + (UpdatableWrapper<N>)seed);
+            //System.out.println("is call" + icfg().isCallStmt(seed));
+            //System.out.println("is exit" + icfg().isExitStmt(seed));
+            //System.out.println("adding " + icfg().getSuccsOf(seed));
+            //workQueue.add((UpdatableWrapper<N>)seed);
+        }
+        Set<UpdatableWrapper<N>> doneSet = new HashSet<UpdatableWrapper<N>>();
+        while (!workQueue.isEmpty()) {
+            UpdatableWrapper<N> n = workQueue.remove(0);
+            if (!doneSet.add(n))
+                continue;
+            try {
+                int src_idx = counterCache.get(n);
+                for (N n0 : icfg().getSuccsOf(n.getContents())) {
+                //for (UpdatableWrapper<N> n0 : oldcfg.getSuccsOf(n)) {
+                    UpdatableWrapper<N> n0_w = oldcfg.wrap(n0);
+                    //workQueue.add(n0);
+                    workQueue.add(n0_w);
+                    //int end_idx = counterCache.get(n0);
+                    int end_idx = counterCache.get(n0_w);
+                    Utils.addElementToMapList(all_Old_Edges, src_idx, end_idx);
+                }
+                if (icfg().isCallStmt(n.getContents())) {
+                    for (M callee : icfg().getCalleesOfCallAt(n.getContents())) {
+                        for (N startNode : icfg().getStartPointsOf(callee)) {
+                            UpdatableWrapper<N> startNode_w = oldcfg.wrap(startNode);
+                            workQueue.add(startNode_w);
+                            //int end_idx = counterCache.get(n0_w);
+                            //Utils.addElementToMapList(all_Old_Edges, src_idx, end_idx);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("caught exception in my code");
+                e.printStackTrace();
+                System.exit(-1);
+            }
+        }
 		UpdatableInterproceduralCFG<N, M> newcfg = (UpdatableInterproceduralCFG<N, M>) newCFG;
 		I newI = (I) newcfg;
 		tabulationProblem.updateCFG(newI);
@@ -308,14 +371,71 @@ public class IDESolver<N,D,M,V,I extends InterproceduralCFG<N, M>> {
 				jumpFn.getTargetCount() : 5000;
 		
 		// Next, we need to create a change set on the control flow graph
-		Map<UpdatableWrapper<N>, List<UpdatableWrapper<N>>> expiredEdges =
-				new HashMap<UpdatableWrapper<N>, List<UpdatableWrapper<N>>>(edgeCount);
-		Map<UpdatableWrapper<N>, List<UpdatableWrapper<N>>> newEdges =
-				new HashMap<UpdatableWrapper<N>, List<UpdatableWrapper<N>>>(edgeCount);
+		Map<UpdatableWrapper<N>, List<UpdatableWrapper<N>>> expiredEdges = new HashMap<UpdatableWrapper<N>, List<UpdatableWrapper<N>>>(edgeCount);
+		Map<UpdatableWrapper<N>, List<UpdatableWrapper<N>>> newEdges = new HashMap<UpdatableWrapper<N>, List<UpdatableWrapper<N>>>(edgeCount);
 		Set<UpdatableWrapper<N>> newNodes = new ConcurrentHashSet<UpdatableWrapper<N>>(nodeCount);
 		Set<UpdatableWrapper<N>> expiredNodes = new ConcurrentHashSet<UpdatableWrapper<N>>(nodeCount);
-		oldcfg.computeCFGChangeset(newcfg, expiredEdges, newEdges, newNodes,
-				expiredNodes);
+		oldcfg.computeCFGChangeset(newcfg, expiredEdges, newEdges, newNodes, expiredNodes);
+
+        // MINe
+        {
+            try {
+                for (UpdatableWrapper<N> srcN : newEdges.keySet()) {
+                    int src_idx = counterCache.get(srcN);
+                    for (UpdatableWrapper<N> endN : newEdges.get(srcN)) {
+                        int end_idx = counterCache.get(endN);
+                        Utils.addElementToMapList(new_New_Edges, src_idx, end_idx);
+                    }
+                }
+                for (UpdatableWrapper<N> srcN : expiredEdges.keySet()) {
+                    int src_idx = counterCache.get(srcN);
+                    for (UpdatableWrapper<N> endN : expiredEdges.get(srcN)) {
+                        int end_idx = counterCache.get(endN);
+                        Utils.addElementToMapList(old_Expired_Edges, src_idx, end_idx);
+                    }
+                }
+                System.out.println("all_Old_Edges: " + all_Old_Edges.size() + " keys for all, I suppose, new_New_Edges: " + new_New_Edges.size() + ", old_Expired_Edges: " + old_Expired_Edges.size());
+                try (Writer writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream("filename.txt"), "utf-8"))) {
+                    writer.write("all_old_edges:\n");
+                    for (Integer src : all_Old_Edges.keySet()) {
+                        for (Integer end : all_Old_Edges.get(src)) {
+                            writer.write("edge: " + src + " " + end + "\n");
+                        }
+                    }
+                    writer.write("new_New_edges:\n");
+                    for (Integer src : new_New_Edges.keySet()) {
+                        for (Integer end : new_New_Edges.get(src)) {
+                            writer.write("edge: " + src + " " + end + "\n");
+                        }
+                    }
+
+                    writer.write("old_Expired_Edges_edges:\n");
+                    for (Integer src : old_Expired_Edges.keySet()) {
+                        for (Integer end : old_Expired_Edges.get(src)) {
+                            writer.write("edge: " + src + " " + end + "\n");
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("caught exception in my code");
+                e.printStackTrace();
+                System.exit(-1);
+            }
+            //} catch (ExecutionException e) {
+                //System.err.println("Could not wrap object");
+                //e.printStackTrace();
+            //} catch (FileNotFoundException e) {
+                //System.err.println("Could not wrap object");
+                //e.printStackTrace();
+            //} catch (UnsupportedEncodingException e) {
+                //System.err.println("Could not wrap object");
+                //e.printStackTrace();
+            //} catch (IOException e) {
+                //System.err.println("Could not wrap object");
+                //e.printStackTrace();
+            //}
+        }
+        // END MINE
 		
 		// Change the wrappers so that they point to the new Jimple objects
 		long beforeMerge = System.nanoTime();
@@ -439,7 +559,7 @@ public class IDESolver<N,D,M,V,I extends InterproceduralCFG<N, M>> {
 					*/
 					hasEdge = true;
 	
-					if (DEBUG)
+					//if (DEBUG)
 						System.out.println("Reprocessing edge: <" + srcD
 								+ "> -> <" + preLoop + ", " + tgtD + "> in "
 								+ icfg().getMethodOf(preLoop));
